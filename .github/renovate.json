@@ -1,0 +1,31 @@
+{
+  "extends": ["config:recommended"],
+  "cargo": {
+    "rangeStrategy": "bump"
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["cargo"],
+      "matchDepTypes": ["workspace.dependencies"],
+      "enabled": true,
+      "separateMajorMinor": true,
+      "separateMultipleMajor": true
+    },
+    {
+      "description": "Only major updates for specific crates",
+      "matchManagers": ["cargo"],
+      "matchDepTypes": ["dependencies"],
+      "matchPackageNames": ["anyhow", "serde", "serde_json", "thiserror"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "enabled": false
+    },
+    {
+      "description": "Only major and minor updates for specific crates",
+      "matchManagers": ["cargo"],
+      "matchDepTypes": ["dependencies"],
+      "matchPackageNames": ["clap"],
+      "matchUpdateTypes": ["patch"],
+      "enabled": false
+    }
+  ]
+}
