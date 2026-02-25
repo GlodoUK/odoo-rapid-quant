@@ -92,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
     let adapter = detected.dialect(&src_pool).await?;
     tracing::info!("Using adapter for Odoo major {}.", adapter.major());
 
-    let warehouse = warehouse::one(&src_pool, cli.warehouse).await?;
+    let warehouse = adapter.warehouse(&src_pool, cli.warehouse).await?;
 
     let mut graph = product::Graph::new(src_pool, warehouse.clone(), adapter).await?;
 

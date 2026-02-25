@@ -10,6 +10,7 @@ use crate::{
     dialect::OdooAdapter,
     odoo::OdooVersion,
     product::{Product, ProductId, Quant},
+    warehouse::Warehouse,
 };
 
 pub struct Adapter {
@@ -376,5 +377,29 @@ impl OdooAdapter for Adapter {
         }
 
         Ok(())
+    }
+
+    async fn warehouse(&self, pool: &PgPool, id: i32) -> Result<Warehouse, sqlx::Error> {
+        sqlx::query_as::<_, Warehouse>(
+            "
+            SELECT
+                stock_warehouse.id,
+                stock_location.parent_path || '%' as location_path,
+                stock_warehouse.name
+            FROM stock_warehouse
+            INNER JOIN stock_location ON stock_location.id = stock_warehouse.lot_stock_id
+            WHERE
+                stock_warehouse.id = $1
+                AND
+                stock_warehouse.active is true
+                AND
+                stock_location.active is true
+                AND
+                stock_location.usage = 'internal'
+        ",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
     }
 }

@@ -8,6 +8,7 @@ use sqlx::PgPool;
 use crate::{
     odoo::OdooVersion,
     product::{Product, ProductId, Quant},
+    warehouse::Warehouse,
 };
 
 pub mod v15;
@@ -37,6 +38,8 @@ pub trait OdooAdapter: Send + Sync {
         decimal_precision: u32,
         raw_quants: &mut HashMap<ProductId, Quant>,
     ) -> Result<(), sqlx::Error>;
+
+    async fn warehouse(&self, pool: &PgPool, id: i32) -> Result<Warehouse, sqlx::Error>;
 }
 
 #[derive(Debug)]

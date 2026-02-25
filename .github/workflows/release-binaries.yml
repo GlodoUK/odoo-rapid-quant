@@ -1,0 +1,112 @@
+name: release-binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing git tag to release (for example: v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  BINARY_NAME: odoo-rapid-quant
+  TARGET: x86_64-unknown-linux-musl
+
+jobs:
+  build-and-publish:
+    name: build-and-publish-linux-musl
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "RELEASE_TAG=${{ github.event.inputs.tag }}" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout requested tag
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: git checkout "${RELEASE_TAG}"
+
+      - name: Validate tag matches Cargo.toml version
+        shell: bash
+        run: |
+          tag_version="${RELEASE_TAG#v}"
+          manifest_version="$(python -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+
+          if [ "${tag_version}" != "${manifest_version}" ]; then
+            echo "::error::Tag ${RELEASE_TAG} does not match Cargo.toml version ${manifest_version}"
+            exit 1
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.TARGET }}
+
+      - name: Install musl toolchain
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Build static Linux binary
+        shell: bash
+        run: cargo build --locked --release --target "${TARGET}"
+
+      - name: Verify static linking
+        shell: bash
+        run: |
+          binary_path="target/${TARGET}/release/${BINARY_NAME}"
+          ldd_output="$(ldd "${binary_path}" 2>&1 || true)"
+          echo "${ldd_output}"
+          if ! grep -Eq "not a dynamic executable|statically linked" <<< "${ldd_output}"; then
+            echo "Expected a static musl binary, but binary appears dynamically linked."
+            exit 1
+          fi
+
+      - name: Package release archive
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${TARGET}/release/${BINARY_NAME}" "dist/${BINARY_NAME}"
+          cp LICENSE "dist/LICENSE"
+          archive="${BINARY_NAME}-${RELEASE_TAG}-${TARGET}.tar.gz"
+          tar -C dist -czf "dist/${archive}" "${BINARY_NAME}" "LICENSE"
+          rm "dist/${BINARY_NAME}" "dist/LICENSE"
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: |
+            dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
