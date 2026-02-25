@@ -72,7 +72,7 @@ jobs:
 
       - name: Build static Linux binary
         shell: bash
-        run: cargo build --locked --release --target "${TARGET}"
+        run: cargo build --release --target "${TARGET}"
 
       - name: Verify static linking
         shell: bash
