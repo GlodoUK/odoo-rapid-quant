@@ -30,6 +30,15 @@ impl Product {
     pub fn is_simple(&self) -> bool {
         matches!(self, Self::Simple(_))
     }
+
+    pub fn type_label(&self) -> &'static str {
+        match self {
+            Self::Simple(_) => "Simple",
+            Self::MrpPhantom(_, _) => "MrpPhantom",
+            Self::MrpNormal(_, _) => "MrpNormal",
+            Self::Commingled(_) => "Commingled",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -65,7 +74,7 @@ impl AvailabilityOutputMode {
         }
     }
 
-    fn project(self, value: Decimal) -> Decimal {
+    pub(crate) fn project(self, value: Decimal) -> Decimal {
         match self {
             Self::ClampToZero if value < Decimal::ZERO => Decimal::ZERO,
             Self::ClampToZero | Self::Signed => value,
@@ -378,6 +387,8 @@ impl Graph {
             let mut incoming = Vec::new();
             let mut outgoing = Vec::new();
             let mut buildable = Vec::new();
+            let mut free_imm = Vec::new();
+            let mut virtual_avail = Vec::new();
 
             // Iterate dependencies (incoming edges)
             for edge in graph.edges_directed(product, petgraph::Incoming) {
@@ -390,6 +401,9 @@ impl Graph {
 
                         incoming.push(dependency_stock.incoming / required_qty);
                         outgoing.push(dependency_stock.outgoing / required_qty);
+
+                        free_imm.push(dependency_stock.free_immediately() / required_qty);
+                        virtual_avail.push(dependency_stock.virtual_available() / required_qty);
                     }
 
                     if info.is_normal_bom() {
@@ -403,18 +417,29 @@ impl Graph {
 
             match info {
                 Product::MrpPhantom(decimal, dp) => {
+                    // Compute quantity and incoming as min across dependencies, then back-solve
+                    // reserved and outgoing from min(free_immediately) and min(virtual_available)
+                    // so that the derived methods return correct values.
+                    // Taking min(reserved) and min(outgoing) independently is wrong because the
+                    // minima can come from different dependencies, making quantity - reserved
+                    // meaningless.
+                    let qty = (*quantity.iter().min().unwrap_or(&zero) * decimal)
+                        .round_dp_with_strategy(*dp, RoundingStrategy::ToZero);
+                    let inc = (*incoming.iter().min().unwrap_or(&zero) * decimal)
+                        .round_dp_with_strategy(*dp, RoundingStrategy::ToZero);
+                    let free = (*free_imm.iter().min().unwrap_or(&zero) * decimal)
+                        .round_dp_with_strategy(*dp, RoundingStrategy::ToZero);
+                    let virt = (*virtual_avail.iter().min().unwrap_or(&zero) * decimal)
+                        .round_dp_with_strategy(*dp, RoundingStrategy::ToZero);
+
                     // If it has dependencies, store the calculated stock
                     let _ = stock_cache.insert(
                         product,
                         Availability {
-                            quantity: (*quantity.iter().min().unwrap_or(&zero) * decimal)
-                                .round_dp_with_strategy(*dp, RoundingStrategy::ToZero),
-                            reserved: (*reserved.iter().min().unwrap_or(&zero) * decimal)
-                                .round_dp_with_strategy(*dp, RoundingStrategy::ToZero),
-                            incoming: (*incoming.iter().min().unwrap_or(&zero) * decimal)
-                                .round_dp_with_strategy(*dp, RoundingStrategy::ToZero),
-                            outgoing: (*outgoing.iter().min().unwrap_or(&zero) * decimal)
-                                .round_dp_with_strategy(*dp, RoundingStrategy::ToZero),
+                            quantity: qty,
+                            reserved: qty - free,
+                            incoming: inc,
+                            outgoing: qty + inc - virt,
                             buildable: zero,
                         },
                     );
@@ -470,6 +495,41 @@ impl Graph {
         products.sort_unstable();
         products
     }
+
+    pub fn diagnostic_tree(
+        &self,
+        product_id: ProductId,
+        required_qty: Option<Decimal>,
+    ) -> Option<DiagnosticNode> {
+        let product = self.catalogue.get(&product_id)?.clone();
+        let availability = self.avail.get(&product_id)?.clone();
+        let raw_quant = self.raw_quants.get(&product_id).cloned();
+
+        let mut children: Vec<DiagnosticNode> = self
+            .graph
+            .edges_directed(product_id, petgraph::Incoming)
+            .filter_map(|edge| self.diagnostic_tree(edge.source(), Some(*edge.weight())))
+            .collect();
+        children.sort_by_key(|n| n.product_id);
+
+        Some(DiagnosticNode {
+            product_id,
+            product,
+            required_qty,
+            raw_quant,
+            availability,
+            children,
+        })
+    }
+}
+
+pub struct DiagnosticNode {
+    pub product_id: ProductId,
+    pub product: Product,
+    pub required_qty: Option<Decimal>,
+    pub raw_quant: Option<Quant>,
+    pub availability: Availability,
+    pub children: Vec<DiagnosticNode>,
 }
 
 #[cfg(test)]
@@ -627,8 +687,11 @@ mod tests {
 
     #[test]
     fn phantom_product_uses_dependency_mins_for_all_fields() {
-        // Phantom BoM aggregates by dependency minimum per field (quantity/reserved/incoming/outgoing)
-        // after normalizing by required_qty.
+        // Phantom BoM computes free_immediately and virtual_available as min across dependencies,
+        // then back-solves reserved = quantity - free_immediately and
+        // outgoing = quantity + incoming - virtual_available. This ensures the derived methods
+        // return correct values rather than taking min() of each field independently (which is
+        // wrong because minima can come from different dependencies).
         let dep_a = ProductId(1);
         let dep_b = ProductId(2);
         let phantom = ProductId(3);
@@ -659,10 +722,15 @@ mod tests {
             .get(&phantom)
             .expect("phantom product must be computed");
 
+        // dep_a: free=10-4=6, virtual=10-1+6=15
+        // dep_b: free=8-2=6,  virtual=8-5+3=6
+        // qty=min(10,8)=8, inc=min(6,3)=3, free=min(6,6)=6, virt=min(15,6)=6
+        // reserved = qty - free = 8 - 6 = 2
+        // outgoing = qty + inc - virt = 8 + 3 - 6 = 5
         assert_eq!(availability.quantity, d("8"));
         assert_eq!(availability.reserved, d("2"));
         assert_eq!(availability.incoming, d("3"));
-        assert_eq!(availability.outgoing, d("1"));
+        assert_eq!(availability.outgoing, d("5"));
         assert_eq!(availability.buildable, d("0"));
     }
 

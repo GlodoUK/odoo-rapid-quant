@@ -3,7 +3,7 @@
 
 use anyhow::Context;
 use clap::Parser;
-use product::{AvailabilityOutputMode, OutputAvailability, ProductId};
+use product::{AvailabilityOutputMode, DiagnosticNode, OutputAvailability, ProductId};
 use serde::Serialize;
 use std::io::{BufWriter, Write, stdout};
 
@@ -33,6 +33,87 @@ struct JsonlAvailabilityRow<'a> {
     buildable: String,
     free_immediately: String,
     virtual_available: String,
+}
+
+fn write_diagnostic_tree<W: Write>(
+    writer: &mut W,
+    node: &DiagnosticNode,
+    mode: AvailabilityOutputMode,
+    prefix: &mut Vec<bool>,
+    is_last: bool,
+) -> anyhow::Result<()> {
+    let avail = node.availability.output(mode);
+
+    if prefix.is_empty() {
+        // Root node
+        writeln!(
+            writer,
+            "Product {} [{}]",
+            node.product_id.0,
+            node.product.type_label()
+        )?;
+        // Indent for sub-lines: root has no connector, just two spaces
+        let sub_indent = "  ";
+        writeln!(writer, "{sub_indent}computed: {avail}")?;
+        if let Some(ref q) = node.raw_quant {
+            writeln!(
+                writer,
+                "{sub_indent}raw: qty={}, reserved={}, incoming={}, outgoing={}",
+                q.quantity, q.reserved, q.incoming, q.outgoing
+            )?;
+        }
+    } else {
+        // Build prefix string from ancestor bools
+        let mut line = String::new();
+        for &has_sibling in prefix[..prefix.len() - 1].iter() {
+            line.push_str(if has_sibling { "│   " } else { "    " });
+        }
+        let connector = if is_last { "└── " } else { "├── " };
+        let req_qty = node
+            .required_qty
+            .expect("non-root node must have required_qty");
+        writeln!(
+            writer,
+            "{}{}[requires {}] Product {} [{}]",
+            line,
+            connector,
+            req_qty,
+            node.product_id.0,
+            node.product.type_label()
+        )?;
+
+        // Sub-lines indent: same prefix + continuation for this node's depth
+        let mut sub_indent = line.clone();
+        sub_indent.push_str(if is_last { "    " } else { "│   " });
+        sub_indent.push_str("  ");
+
+        writeln!(writer, "{sub_indent}computed: {avail}")?;
+        if let Some(ref q) = node.raw_quant {
+            writeln!(
+                writer,
+                "{sub_indent}raw: qty={}, reserved={}, incoming={}, outgoing={}",
+                q.quantity, q.reserved, q.incoming, q.outgoing
+            )?;
+        }
+        // Normalized line
+        let qty_norm = mode.project(node.availability.quantity / req_qty);
+        let free_norm = mode.project(node.availability.free_immediately() / req_qty);
+        let virtual_norm = mode.project(node.availability.virtual_available() / req_qty);
+        writeln!(
+            writer,
+            "{sub_indent}normalized (÷{req_qty}): qty={qty_norm}, free={free_norm}, virtual_available={virtual_norm}"
+        )?;
+    }
+
+    let child_count = node.children.len();
+    for (i, child) in node.children.iter().enumerate() {
+        let child_is_last = i == child_count - 1;
+        prefix.push(!child_is_last);
+        write_diagnostic_tree(writer, child, mode, prefix, child_is_last)?;
+        let _ = prefix.pop();
+    }
+
+    Ok(())
 }
 
 fn write_jsonl_row<W: Write>(
@@ -98,6 +179,10 @@ async fn main() -> anyhow::Result<()> {
 
     let requested_products: Vec<ProductId> = cli.product.iter().copied().map(ProductId).collect();
 
+    if cli.stdout == Some(StdoutFormat::Diagnose) && requested_products.len() != 1 {
+        anyhow::bail!("--stdout diagnose requires exactly one --product <ID>");
+    }
+
     graph.collect(&requested_products).await?;
 
     let products = if requested_products.is_empty() {
@@ -112,17 +197,29 @@ async fn main() -> anyhow::Result<()> {
         let lock = stdout().lock();
         let mut writer = BufWriter::new(lock);
 
-        for product in &products {
-            let availability = graph
-                .get(product)
-                .with_context(|| format!("missing availability for product_id={}", product.0))?;
-            let output = availability.output(output_mode);
-            match stdout_format {
-                StdoutFormat::Human => {
-                    writeln!(writer, "{:?}, {}: {}", product, warehouse.name, output)?;
-                }
-                StdoutFormat::Jsonl => {
-                    write_jsonl_row(&mut writer, *product, &warehouse, &output)?;
+        match stdout_format {
+            StdoutFormat::Diagnose => {
+                let root_id = products[0];
+                let tree = graph
+                    .diagnostic_tree(root_id, None)
+                    .with_context(|| format!("product {} not found in graph", root_id.0))?;
+                write_diagnostic_tree(&mut writer, &tree, output_mode, &mut vec![], true)?;
+            }
+            _ => {
+                for product in &products {
+                    let availability = graph.get(product).with_context(|| {
+                        format!("missing availability for product_id={}", product.0)
+                    })?;
+                    let output = availability.output(output_mode);
+                    match stdout_format {
+                        StdoutFormat::Human => {
+                            writeln!(writer, "{:?}, {}: {}", product, warehouse.name, output)?;
+                        }
+                        StdoutFormat::Jsonl => {
+                            write_jsonl_row(&mut writer, *product, &warehouse, &output)?;
+                        }
+                        StdoutFormat::Diagnose => unreachable!(),
+                    }
                 }
             }
         }

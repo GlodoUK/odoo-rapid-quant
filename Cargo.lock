@@ -941,8 +941,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "odoo-stock-availability"
-version = "0.1.0"
+name = "odoo-rapid-quant"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",

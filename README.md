@@ -47,7 +47,7 @@ cargo run -- --warehouse <WAREHOUSE_ID> --src-db-url "postgres://user:pass@host:
 - `--log-level <off|error|warn|info|debug|trace>`: Tracing level for logs (default: `warn`).
 - `--allow-negative`: Emit signed values. By default, all numeric output fields are clamped to `0`.
 - `--product <ID>`: Optional product filter; can be repeated.
-- `--stdout [human|jsonl]`: Opt-in stdout output. If no value is provided, defaults to `human`.
+- `--stdout [human|jsonl|diagnose]`: Opt-in stdout output. If no value is provided, defaults to `human`.
 - `--sink-db-url <URL>`: Sink Postgres URL used when `--sink-db-stmt` is set.
 - `--sink-db-stmt <SQL>`: SQL template executed once per computed row.
 
@@ -79,6 +79,8 @@ typed values using `sqlx`.
 
 - `human`: friendly text output (good for interactive runs).
 - `jsonl`: one JSON object per line (good for scripts/pipes).
+- `diagnose`: friendly tree like diagram (good for interactive runs), supports only a
+  single product.
 
 `jsonl` fields:
 

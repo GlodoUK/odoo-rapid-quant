@@ -65,6 +65,7 @@ pub struct Args {
 pub enum StdoutFormat {
     Human,
     Jsonl,
+    Diagnose,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
