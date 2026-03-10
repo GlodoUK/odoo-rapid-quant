@@ -406,12 +406,10 @@ impl Graph {
                         virtual_avail.push(dependency_stock.virtual_available() / required_qty);
                     }
 
-                    if info.is_normal_bom() {
-                        buildable.push(
-                            (dependency_stock.buildable + dependency_stock.free_immediately())
-                                / required_qty,
-                        );
-                    }
+                    buildable.push(
+                        (dependency_stock.buildable + dependency_stock.free_immediately())
+                            / required_qty,
+                    );
                 }
             }
 
@@ -440,7 +438,8 @@ impl Graph {
                             reserved: qty - free,
                             incoming: inc,
                             outgoing: qty + inc - virt,
-                            buildable: zero,
+                            buildable: *buildable.iter().min().unwrap_or(&zero)
+                                * decimal.round_dp_with_strategy(*dp, RoundingStrategy::ToZero),
                         },
                     );
                 }
@@ -731,7 +730,7 @@ mod tests {
         assert_eq!(availability.reserved, d("2"));
         assert_eq!(availability.incoming, d("3"));
         assert_eq!(availability.outgoing, d("5"));
-        assert_eq!(availability.buildable, d("0"));
+        assert_eq!(availability.buildable, d("6"));
     }
 
     #[test]
@@ -815,7 +814,7 @@ mod tests {
         assert_eq!(availability.reserved, d("1.30"));
         assert_eq!(availability.incoming, d("0.12"));
         assert_eq!(availability.outgoing, d("0.02"));
-        assert_eq!(availability.buildable, d("0"));
+        assert_eq!(availability.buildable, d("2.38"));
     }
 
     #[test]
