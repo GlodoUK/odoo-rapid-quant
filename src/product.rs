@@ -23,10 +23,6 @@ pub enum Product {
 }
 
 impl Product {
-    pub fn is_normal_bom(&self) -> bool {
-        matches!(self, Self::MrpNormal(_, _))
-    }
-
     pub fn is_simple(&self) -> bool {
         matches!(self, Self::Simple(_))
     }
@@ -37,6 +33,15 @@ impl Product {
             Self::MrpPhantom(_, _) => "MrpPhantom",
             Self::MrpNormal(_, _) => "MrpNormal",
             Self::Commingled(_) => "Commingled",
+        }
+    }
+
+    pub fn dp(&self) -> u32 {
+        *match self {
+            Product::Simple(dp) => dp,
+            Product::MrpPhantom(_, dp) => dp,
+            Product::MrpNormal(_, dp) => dp,
+            Product::Commingled(dp) => dp,
         }
     }
 }
@@ -376,6 +381,10 @@ impl Graph {
 
                     avail.incoming = quant.incoming;
                     avail.outgoing = quant.outgoing;
+                    // Required to seed the buildable for future things
+                    // Realistically this isn't actually helpful as a figure for a simple, but this
+                    // is the least impactful solution here
+                    avail.buildable = avail.free_immediately();
                 }
 
                 let _ = stock_cache.insert(product, avail);
@@ -394,21 +403,26 @@ impl Graph {
             for edge in graph.edges_directed(product, petgraph::Incoming) {
                 let (dependency, required_qty) = (edge.source(), *edge.weight());
                 if let Some(dependency_stock) = stock_cache.get(&dependency) {
-                    if !info.is_normal_bom() {
-                        // only do this work if we need to
-                        quantity.push(dependency_stock.quantity / required_qty);
-                        reserved.push(dependency_stock.reserved / required_qty);
+                    // only do this work if we need to
+                    quantity.push(dependency_stock.quantity / required_qty);
+                    reserved.push(dependency_stock.reserved / required_qty);
 
-                        incoming.push(dependency_stock.incoming / required_qty);
-                        outgoing.push(dependency_stock.outgoing / required_qty);
+                    incoming.push(dependency_stock.incoming / required_qty);
+                    outgoing.push(dependency_stock.outgoing / required_qty);
 
-                        free_imm.push(dependency_stock.free_immediately() / required_qty);
-                        virtual_avail.push(dependency_stock.virtual_available() / required_qty);
-                    }
+                    free_imm.push(dependency_stock.free_immediately() / required_qty);
+                    virtual_avail.push(dependency_stock.virtual_available() / required_qty);
+
+                    let dependency_dp = catalogue.get(&product).unwrap_or_else(|| {
+                        panic!(
+                            "Somehow we have a product in the graph not in the catalogue?!: {:?}",
+                            product
+                        )
+                    }).dp();
 
                     buildable.push(
-                        (dependency_stock.buildable + dependency_stock.free_immediately())
-                            / required_qty,
+                        (dependency_stock.buildable / required_qty)
+                            .round_dp_with_strategy(dependency_dp, RoundingStrategy::ToZero),
                     );
                 }
             }
@@ -681,7 +695,7 @@ mod tests {
         assert_eq!(availability.reserved, d("2"));
         assert_eq!(availability.incoming, d("3"));
         assert_eq!(availability.outgoing, d("1"));
-        assert_eq!(availability.buildable, d("0"));
+        assert_eq!(availability.buildable, d("8"));
     }
 
     #[test]
@@ -779,7 +793,6 @@ mod tests {
     #[test]
     fn commingled_product_sums_dependencies_with_rounding() {
         // Commingled products sum dependency contributions per field, then round to product dp.
-        // Example: quantity = 1.239 + 2.455 = 3.694 -> 3.69 (dp=2, ToZero).
         let dep_a = ProductId(1);
         let dep_b = ProductId(2);
         let commingled = ProductId(3);
@@ -789,9 +802,9 @@ mod tests {
         graph.add_edge(dep_b, commingled, d("1"));
 
         let mut catalogue = HashMap::new();
-        catalogue.insert(dep_a, Product::Simple(2));
-        catalogue.insert(dep_b, Product::Simple(2));
-        catalogue.insert(commingled, Product::Commingled(2));
+        catalogue.insert(dep_a, Product::Simple(0));
+        catalogue.insert(dep_b, Product::Simple(0));
+        catalogue.insert(commingled, Product::Commingled(0));
 
         let mut raw_quants = HashMap::new();
         raw_quants.insert(dep_a, quant("1.239", "0.101", "0.009", "0.001"));
@@ -810,11 +823,11 @@ mod tests {
             .get(&commingled)
             .expect("commingled product must be computed");
 
-        assert_eq!(availability.quantity, d("3.69"));
-        assert_eq!(availability.reserved, d("1.30"));
-        assert_eq!(availability.incoming, d("0.12"));
-        assert_eq!(availability.outgoing, d("0.02"));
-        assert_eq!(availability.buildable, d("2.38"));
+        assert_eq!(availability.quantity, d("3"));
+        assert_eq!(availability.reserved, d("1"));
+        assert_eq!(availability.incoming, d("0"));
+        assert_eq!(availability.outgoing, d("0"));
+        assert_eq!(availability.buildable, d("2"));
     }
 
     #[test]

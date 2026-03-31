@@ -43,7 +43,7 @@ impl OdooAdapter for Adapter {
             "
             SELECT
                 product_product.id,
-                -log(uom_uom.rounding)::int
+                uom_uom.rounding
             FROM product_product
             INNER JOIN product_template ON product_product.product_tmpl_id = product_template.id
             INNER JOIN uom_uom ON uom_uom.id = product_template.uom_id
@@ -76,11 +76,11 @@ impl OdooAdapter for Adapter {
         }
 
         let mut simple_stream = simple_query
-            .build_query_as::<(ProductId, i32)>()
+            .build_query_as::<(ProductId, Decimal)>()
             .fetch(pool);
 
-        while let Some((product_id, dp)) = simple_stream.try_next().await? {
-            let _ = catalogue.insert(product_id, Product::Simple(dp as u32));
+        while let Some((product_id, rounding)) = simple_stream.try_next().await? {
+            let _ = catalogue.insert(product_id, Product::Simple(rounding.scale()));
             let _ = graph.add_node(product_id);
         }
 
@@ -90,7 +90,7 @@ impl OdooAdapter for Adapter {
                 "
                 SELECT
                     product_product.id,
-                    -log(uom_uom.rounding)::int
+                    uom_uom.rounding
                 FROM product_product
                 INNER JOIN product_template ON product_product.product_tmpl_id = product_template.id
                 INNER JOIN uom_uom ON uom_uom.id = product_template.uom_id
@@ -102,10 +102,10 @@ impl OdooAdapter for Adapter {
             );
 
             let mut stream = commingled_query
-                .build_query_as::<(ProductId, i32)>()
+                .build_query_as::<(ProductId, Decimal)>()
                 .fetch(pool);
-            while let Some((product_id, dp)) = stream.try_next().await? {
-                let _ = catalogue.insert(product_id, Product::Commingled(dp as u32));
+            while let Some((product_id, rounding)) = stream.try_next().await? {
+                let _ = catalogue.insert(product_id, Product::Commingled(rounding.scale()));
                 let _ = graph.add_node(product_id);
             }
         }
@@ -118,11 +118,8 @@ impl OdooAdapter for Adapter {
                     DISTINCT ON (product_product.id)
                     product_product.id,
                     mrp_bom.type,
-                    round(
-                        mrp_bom.product_qty / mrp_uom.factor * product_uom.factor
-                        -log(product_uom.rounding)::int
-                    ) AS product_qty,
-                    -log(product_uom.rounding)::int
+                    mrp_bom.product_qty / mrp_uom.factor * product_uom.factor AS product_qty,
+                    product_uom.rounding
                 FROM product_product
                 INNER JOIN product_template ON product_product.product_tmpl_id = product_template.id
                 INNER JOIN uom_uom AS product_uom ON product_uom.id = product_template.uom_id
@@ -145,13 +142,16 @@ impl OdooAdapter for Adapter {
             let _ = bom_query.push(" ORDER BY product_product.id, mrp_bom.sequence ASC");
 
             let mut stream = bom_query
-                .build_query_as::<(ProductId, String, Decimal, i32)>()
+                .build_query_as::<(ProductId, String, Decimal, Decimal)>()
                 .fetch(pool);
 
-            while let Some((product_id, bom_type, quantity, dp)) = stream.try_next().await? {
+            while let Some((product_id, bom_type, quantity, rounding)) = stream.try_next().await? {
+                let dp = rounding.scale();
+                let quantity =
+                    quantity.round_dp_with_strategy(dp, RoundingStrategy::MidpointAwayFromZero);
                 let product = match bom_type.as_str() {
-                    "phantom" => Product::MrpPhantom(quantity, dp as u32),
-                    "normal" => Product::MrpNormal(quantity, dp as u32),
+                    "phantom" => Product::MrpPhantom(quantity, dp),
+                    "normal" => Product::MrpNormal(quantity, dp),
                     _ => unreachable!("Unhandled BoM type"),
                 };
 
@@ -177,10 +177,8 @@ impl OdooAdapter for Adapter {
                 select
                   mrp_bom.product_id as parent_product_id,
                   mrp_bom_line.product_id as child_product_id,
-                  round(
-                      COALESCE(mrp_bom_line.product_qty, 1) / line_uom.factor * line_product_uom.factor,
-                     -log(line_product_uom.rounding)::int
-                  ) as child_qty
+                  COALESCE(mrp_bom_line.product_qty, 1) / line_uom.factor * line_product_uom.factor as child_qty,
+                  line_product_uom.rounding
                 from mrp_bom_line
                 inner join mrp_bom on mrp_bom.id = mrp_bom_line.bom_id
                 inner join product_template on product_template.id = mrp_bom.product_tmpl_id
@@ -192,8 +190,6 @@ impl OdooAdapter for Adapter {
                 where
                   product_template.type = 'product'
                   AND
-                  product_template.active is true
-                  AND
                   product_product.active is true
                   AND
                   mrp_bom.active is true
@@ -201,16 +197,19 @@ impl OdooAdapter for Adapter {
                   line_product_product.active is true
                   AND
                   line_product_template.type = 'product'
-                  AND line_product_template.active is true;
             ",
             );
 
             let mut stream = mrp_edges_query
-                .build_query_as::<(ProductId, ProductId, Decimal)>()
+                .build_query_as::<(ProductId, ProductId, Decimal, Decimal)>()
                 .fetch(pool);
 
-            while let Some((parent, child, child_qty)) = stream.try_next().await? {
+            while let Some((parent, child, child_qty, rounding)) = stream.try_next().await? {
                 if graph.contains_node(parent) && graph.contains_node(child) {
+                    let child_qty = child_qty.round_dp_with_strategy(
+                        rounding.scale(),
+                        RoundingStrategy::MidpointAwayFromZero,
+                    );
                     let _ = graph.add_edge(child, parent, child_qty);
                 }
             }

@@ -5,9 +5,15 @@ use anyhow::Context;
 use clap::Parser;
 use product::{AvailabilityOutputMode, DiagnosticNode, OutputAvailability, ProductId};
 use serde::Serialize;
-use std::io::{BufWriter, Write, stdout};
+use std::{
+    io::{BufWriter, Write, stdout},
+    time::Duration,
+};
 
-use sqlx::postgres::PgPoolOptions;
+use sqlx::{
+    ConnectOptions,
+    postgres::{PgConnectOptions, PgPoolOptions},
+};
 
 use crate::{
     cli::{Args, LogLevel, StdoutFormat},
@@ -164,9 +170,14 @@ async fn main() -> anyhow::Result<()> {
     let cli = Args::parse();
     init_tracing(cli.log_level)?;
 
+    let src_pool_options: PgConnectOptions = cli
+        .src_db_url
+        .parse::<PgConnectOptions>()?
+        .log_slow_statements(log::LevelFilter::Warn, Duration::from_secs(2));
+
     let src_pool = PgPoolOptions::new()
         .max_connections(1)
-        .connect(&cli.src_db_url)
+        .connect_with(src_pool_options)
         .await?;
 
     let detected = odoo::OdooVersion::detect_from_database(&src_pool).await?;

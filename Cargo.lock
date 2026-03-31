@@ -942,12 +942,13 @@ dependencies = [
 
 [[package]]
 name = "odoo-rapid-quant"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
  "clap",
  "futures",
+ "log",
  "petgraph",
  "regex",
  "rust_decimal",

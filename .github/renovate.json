@@ -23,7 +23,7 @@
       "description": "Only major and minor updates for specific crates",
       "matchManagers": ["cargo"],
       "matchDepTypes": ["dependencies"],
-      "matchPackageNames": ["clap"],
+      "matchPackageNames": ["clap", "log"],
       "matchUpdateTypes": ["patch"],
       "enabled": false
     }
