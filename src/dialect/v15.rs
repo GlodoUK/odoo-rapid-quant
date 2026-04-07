@@ -7,7 +7,7 @@ use rust_decimal::{Decimal, RoundingStrategy};
 use sqlx::{PgPool, QueryBuilder};
 
 use crate::{
-    dialect::OdooAdapter,
+    dialect::{OdooAdapter, dp_from_rounding},
     odoo::OdooVersion,
     product::{Product, ProductId, Quant},
     warehouse::Warehouse,
@@ -80,7 +80,7 @@ impl OdooAdapter for Adapter {
             .fetch(pool);
 
         while let Some((product_id, rounding)) = simple_stream.try_next().await? {
-            let _ = catalogue.insert(product_id, Product::Simple(rounding.scale()));
+            let _ = catalogue.insert(product_id, Product::Simple(dp_from_rounding(rounding)));
             let _ = graph.add_node(product_id);
         }
 
@@ -105,7 +105,8 @@ impl OdooAdapter for Adapter {
                 .build_query_as::<(ProductId, Decimal)>()
                 .fetch(pool);
             while let Some((product_id, rounding)) = stream.try_next().await? {
-                let _ = catalogue.insert(product_id, Product::Commingled(rounding.scale()));
+                let _ =
+                    catalogue.insert(product_id, Product::Commingled(dp_from_rounding(rounding)));
                 let _ = graph.add_node(product_id);
             }
         }
@@ -146,9 +147,8 @@ impl OdooAdapter for Adapter {
                 .fetch(pool);
 
             while let Some((product_id, bom_type, quantity, rounding)) = stream.try_next().await? {
-                let dp = rounding.scale();
-                let quantity =
-                    quantity.round_dp_with_strategy(dp, RoundingStrategy::MidpointAwayFromZero);
+                let dp = dp_from_rounding(rounding);
+                let quantity = quantity.round_dp_with_strategy(dp, RoundingStrategy::ToZero);
                 let product = match bom_type.as_str() {
                     "phantom" => Product::MrpPhantom(quantity, dp),
                     "normal" => Product::MrpNormal(quantity, dp),
@@ -207,8 +207,8 @@ impl OdooAdapter for Adapter {
             while let Some((parent, child, child_qty, rounding)) = stream.try_next().await? {
                 if graph.contains_node(parent) && graph.contains_node(child) {
                     let child_qty = child_qty.round_dp_with_strategy(
-                        rounding.scale(),
-                        RoundingStrategy::MidpointAwayFromZero,
+                        dp_from_rounding(rounding),
+                        RoundingStrategy::ToZero,
                     );
                     let _ = graph.add_edge(child, parent, child_qty);
                 }

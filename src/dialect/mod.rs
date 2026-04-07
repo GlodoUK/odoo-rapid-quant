@@ -13,6 +13,14 @@ use crate::{
 
 pub mod v15;
 
+pub fn dp_from_rounding(rounding: Decimal) -> u32 {
+    if rounding >= Decimal::ONE {
+        0
+    } else {
+        rounding.scale()
+    }
+}
+
 #[async_trait]
 pub trait OdooAdapter: Send + Sync {
     fn major(&self) -> OdooVersion;

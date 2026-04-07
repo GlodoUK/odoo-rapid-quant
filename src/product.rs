@@ -373,14 +373,23 @@ impl Graph {
                 )
             });
             if info.is_simple() {
+                let dp = info.dp();
                 let mut avail = Availability::default();
 
                 if let Some(quant) = raw_quants.get(&product) {
-                    avail.quantity = quant.quantity;
-                    avail.reserved = quant.reserved;
+                    avail.quantity = quant
+                        .quantity
+                        .round_dp_with_strategy(dp, RoundingStrategy::ToZero);
+                    avail.reserved = quant
+                        .reserved
+                        .round_dp_with_strategy(dp, RoundingStrategy::ToZero);
 
-                    avail.incoming = quant.incoming;
-                    avail.outgoing = quant.outgoing;
+                    avail.incoming = quant
+                        .incoming
+                        .round_dp_with_strategy(dp, RoundingStrategy::ToZero);
+                    avail.outgoing = quant
+                        .outgoing
+                        .round_dp_with_strategy(dp, RoundingStrategy::ToZero);
                     // Required to seed the buildable for future things
                     // Realistically this isn't actually helpful as a figure for a simple, but this
                     // is the least impactful solution here
@@ -403,22 +412,40 @@ impl Graph {
             for edge in graph.edges_directed(product, petgraph::Incoming) {
                 let (dependency, required_qty) = (edge.source(), *edge.weight());
                 if let Some(dependency_stock) = stock_cache.get(&dependency) {
-                    // only do this work if we need to
-                    quantity.push(dependency_stock.quantity / required_qty);
-                    reserved.push(dependency_stock.reserved / required_qty);
-
-                    incoming.push(dependency_stock.incoming / required_qty);
-                    outgoing.push(dependency_stock.outgoing / required_qty);
-
-                    free_imm.push(dependency_stock.free_immediately() / required_qty);
-                    virtual_avail.push(dependency_stock.virtual_available() / required_qty);
-
                     let dependency_dp = catalogue.get(&product).unwrap_or_else(|| {
                         panic!(
                             "Somehow we have a product in the graph not in the catalogue?!: {:?}",
                             product
                         )
                     }).dp();
+
+                    // only do this work if we need to
+                    quantity.push(
+                        (dependency_stock.quantity / required_qty)
+                            .round_dp_with_strategy(dependency_dp, RoundingStrategy::ToZero),
+                    );
+                    reserved.push(
+                        (dependency_stock.reserved / required_qty)
+                            .round_dp_with_strategy(dependency_dp, RoundingStrategy::ToZero),
+                    );
+
+                    incoming.push(
+                        (dependency_stock.incoming / required_qty)
+                            .round_dp_with_strategy(dependency_dp, RoundingStrategy::ToZero),
+                    );
+                    outgoing.push(
+                        (dependency_stock.outgoing / required_qty)
+                            .round_dp_with_strategy(dependency_dp, RoundingStrategy::ToZero),
+                    );
+
+                    free_imm.push(
+                        (dependency_stock.free_immediately() / required_qty)
+                            .round_dp_with_strategy(dependency_dp, RoundingStrategy::ToZero),
+                    );
+                    virtual_avail.push(
+                        (dependency_stock.virtual_available() / required_qty)
+                            .round_dp_with_strategy(dependency_dp, RoundingStrategy::ToZero),
+                    );
 
                     buildable.push(
                         (dependency_stock.buildable / required_qty)
