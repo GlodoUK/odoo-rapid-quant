@@ -132,6 +132,7 @@ impl OdooAdapter for Adapter {
                     AND product_template.type = 'product'
                     AND mrp_bom.active is true
                     AND mrp_bom.type in ('normal', 'phantom')
+                    AND mrp_bom.product_qty > 0
             ",
             );
 
@@ -197,6 +198,10 @@ impl OdooAdapter for Adapter {
                   line_product_product.active is true
                   AND
                   line_product_template.type = 'product'
+                  AND
+                  mrp_bom.product_qty > 0
+                  AND
+                  mrp_bom_line.product_qty > 0
             ",
             );
 

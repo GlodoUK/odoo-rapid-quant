@@ -1,6 +1,6 @@
 [package]
 name = "odoo-rapid-quant"
-version = "0.1.4"
+version = "0.1.5"
 license = "LGPL-3.0-or-later"
 edition = "2024"
 rust-version = "1.85"

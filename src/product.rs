@@ -411,6 +411,9 @@ impl Graph {
             // Iterate dependencies (incoming edges)
             for edge in graph.edges_directed(product, petgraph::Incoming) {
                 let (dependency, required_qty) = (edge.source(), *edge.weight());
+                if required_qty <= Decimal::ZERO {
+                    continue;
+                }
                 if let Some(dependency_stock) = stock_cache.get(&dependency) {
                     let dependency_dp = catalogue.get(&product).unwrap_or_else(|| {
                         panic!(
